@@ -1417,10 +1417,11 @@ const StaffMgr = {
         <td><span class="pill ${p.is_active ? 'ok' : 'danger'}">${p.is_active ? 'مفعّل' : 'معطّل'}</span></td>
         <td style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn ghost sm" onclick="StaffMgr.rename('${p.id}', '${escapeHtml(p.full_name).replace(/'/g, "\\'")}')">تعديل الاسم</button>
+          <button class="btn ghost sm" onclick="StaffMgr.resetPassword('${p.id}', '${escapeHtml(p.full_name).replace(/'/g, "\\'")}')">🔑 كلمة المرور</button>
           <button class="btn ghost sm" ${p.id === profile.id ? 'disabled' : ''} onclick="StaffMgr.toggleActive('${p.id}', ${!p.is_active})">${p.is_active ? 'تعطيل' : 'تفعيل'}</button>
         </td>
       </tr>`).join('')}</tbody></table></div>
-      <p class="muted" style="margin-top:10px">لإعادة تعيين كلمة مرور موظف: من لوحة Supabase ← Authentication ← Users ← اختر الحساب ← Reset Password. أو يمكن للموظف نفسه استخدام «نسيت كلمة المرور؟» في شاشة الدخول.</p>`;
+      <p class="muted" style="margin-top:10px">يمكنك تعيين كلمة مرور جديدة لأي مشرف مباشرة من زر «🔑 كلمة المرور»، أو يمكن للموظف نفسه استخدام «نسيت كلمة المرور؟» في شاشة الدخول.</p>`;
   },
   rename(id, currentName) {
     Modal.open(`
@@ -1443,6 +1444,50 @@ const StaffMgr = {
     if (error) { toast('تعذر تغيير الدور: ' + error.message, 'error'); StaffMgr.load(); return; }
     toast('تم تحديث الدور', 'success');
     StaffMgr.load();
+  },
+  resetPassword(id, name) {
+    Modal.open(`
+      <h3>🔑 إعادة تعيين كلمة المرور</h3>
+      <div class="muted">${escapeHtml(name)}</div>
+      <label>كلمة المرور الجديدة</label>
+      <input type="text" id="rp-new-pass" dir="ltr" placeholder="8 أحرف على الأقل">
+      <p class="muted" style="margin-top:8px">شارك كلمة المرور الجديدة مع الموظف مباشرة؛ يمكنه تغييرها لاحقًا بنفسه من «نسيت كلمة المرور؟».</p>
+      <div id="rp-err" class="err-box hidden"></div>
+      <div class="form-actions"><button class="btn block" id="rp-submit" onclick="StaffMgr.savePasswordReset('${id}')">تعيين كلمة المرور</button></div>
+    `);
+  },
+  async savePasswordReset(id) {
+    const password = document.getElementById('rp-new-pass').value;
+    const errBox = document.getElementById('rp-err');
+    errBox.classList.add('hidden');
+    if (password.length < 8) { errBox.textContent = 'كلمة المرور يجب ألا تقل عن 8 أحرف'; errBox.classList.remove('hidden'); return; }
+    const btn = document.getElementById('rp-submit');
+    btn.disabled = true; btn.textContent = 'جارٍ التنفيذ…';
+    try {
+      const { data: { session: cur } } = await sb.auth.getSession();
+      const res = await fetch(`${cfg.SUPABASE_URL}/functions/v1/admin-reset-password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${cur?.access_token || ''}`,
+          'apikey': cfg.SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ user_id: id, new_password: password }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.error) {
+        errBox.textContent = 'تعذر التنفيذ: ' + (json.error || res.statusText);
+        errBox.classList.remove('hidden');
+        return;
+      }
+      toast('تم تعيين كلمة المرور الجديدة بنجاح', 'success');
+      Modal.close();
+    } catch (e) {
+      errBox.textContent = 'تعذر الاتصال بالخادم: ' + e.message;
+      errBox.classList.remove('hidden');
+    } finally {
+      btn.disabled = false; btn.textContent = 'تعيين كلمة المرور';
+    }
   },
   async toggleActive(id, active) {
     const { error } = await withLoading(sb.rpc('set_user_active', { target_user_id: id, active }));
