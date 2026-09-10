@@ -1,9 +1,4 @@
-<!doctype html>
-<html lang="ar" dir="rtl">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-
+<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>منظومة السلوك الطلابي</title>
 <meta name="theme-color" content="#0F5132">
 <meta name="mobile-web-app-capable" content="yes">
@@ -217,10 +212,7 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:14px 0}
 .search-box{position:relative}
 .search-box input{padding-left:38px}
 .search-box .ic{position:absolute;left:12px;top:50%;transform:translateY(-50%);opacity:.5}
-</style>
-</head>
-<body>
-
+</style><body>
 
 
 
@@ -313,11 +305,18 @@ hr.sep{border:none;border-top:1px solid var(--line);margin:14px 0}
     </div>
     <div class="right">
       <span class="user" id="topbar-user"></span>
+      <button class="icon-btn" title="تحديث التطبيق لآخر نسخة" onclick="VersionCheck.forceRefresh()">🔄</button>
       <button class="icon-btn" title="تسجيل الخروج" onclick="Auth.signOut()">⏻</button>
     </div>
   </div>
 
   <div class="wrap" id="view-root"></div>
+</div>
+
+<!-- ===================== شريط تنبيه بوجود تحديث جديد ===================== -->
+<div id="update-banner" class="hidden" style="position:fixed;top:0;left:0;right:0;z-index:110;background:var(--gold);color:#fff;padding:10px 14px;text-align:center;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;box-shadow:var(--shadow)">
+  <span>🔔 يتوفر تحديث جديد للتطبيق</span>
+  <button class="btn sm" style="background:#fff;color:var(--emerald)" onclick="VersionCheck.forceRefresh()">تحديث الآن</button>
 </div>
 
 <!-- ===================== قالب Sheet المنبثق (لتفاصيل عنصر في السجل الزمني إلخ) ===================== -->
@@ -331,6 +330,8 @@ window.APP_CONFIG = {
   SUPABASE_URL: "https://kmugqbbhkqwcsthrchbt.supabase.co",
   SUPABASE_ANON_KEY: "sb_publishable_7lnSNnVp_lc2RRYqZ9VgHA_EX6EeeJ1",
 };
+/* رقم نسخة الملف — يتغيّر مع كل تحديث لتفعيل تنبيه «يتوفر تحديث جديد» تلقائيًا */
+window.APP_VERSION = "2026-09-10.3";
 </script>
 <script>
 'use strict';
@@ -686,7 +687,7 @@ async function searchStudents(term) {
   const { data, error } = await sb.from('students')
     .select('id, academic_number, full_name, level, room, is_active')
     .eq('is_active', true)
-    .or(`academic_number.ilike.%${t}%,full_name.ilike.%${t}%`)
+    .or(`academic_number.ilike.%${t}%,full_name.ilike.%${t}%,room.ilike.%${t}%`)
     .order('full_name').limit(30);
   if (error) { toast('خطأ في البحث', 'error'); return []; }
   return data || [];
@@ -721,7 +722,7 @@ function renderEntryFlow(root, kind) {
       <h2>${heading}</h2>
       ${!st.student ? `
         <label>ابحث بالرقم الأكاديمي أو الاسم</label>
-        <div class="search-box"><input type="text" id="ef-search" placeholder="اكتب الرقم الأكاديمي أو الاسم…" autofocus></div>
+        <div class="search-box"><input type="text" id="ef-search" placeholder="اكتب الرقم الأكاديمي أو الاسم أو رقم الغرفة…" autofocus></div>
         <div id="ef-results" style="margin-top:12px"></div>
       ` : `
         <div class="result-item" style="cursor:default">
@@ -794,7 +795,7 @@ Views.studentSearch = async (root) => {
   root.innerHTML = `
     <div class="card">
       <h2>🔎 بحث عن طالب</h2>
-      <div class="search-box"><input type="text" id="ss-search" placeholder="الرقم الأكاديمي أو الاسم…" autofocus></div>
+      <div class="search-box"><input type="text" id="ss-search" placeholder="الرقم الأكاديمي أو الاسم أو رقم الغرفة…" autofocus></div>
       <div id="ss-results" style="margin-top:12px"></div>
     </div>`;
   const input = document.getElementById('ss-search');
@@ -1208,7 +1209,7 @@ Views.studentsManage = async (root) => {
         <button class="btn secondary" onclick="StudentsMgr.openImport()">📥 رفع ملف Excel</button>
       </div>
       <label style="margin-top:14px">بحث</label>
-      <input type="text" id="sm-search" placeholder="ابحث بالاسم أو الرقم الأكاديمي" value="${escapeHtml(st.q)}">
+      <input type="text" id="sm-search" placeholder="ابحث بالاسم أو الرقم الأكاديمي أو رقم الغرفة" value="${escapeHtml(st.q)}">
     </div>
     <div id="sm-list"><div class="empty-state">جارٍ التحميل…</div></div>
   `;
@@ -1225,7 +1226,7 @@ const StudentsMgr = {
     const st = window.__stuMgr;
     const list = document.getElementById('sm-list');
     let q = sb.from('students').select('*').eq('is_active', true).order('full_name').limit(300);
-    if (st.q.trim()) q = q.or(`academic_number.ilike.%${st.q.trim()}%,full_name.ilike.%${st.q.trim()}%`);
+    if (st.q.trim()) q = q.or(`academic_number.ilike.%${st.q.trim()}%,full_name.ilike.%${st.q.trim()}%,room.ilike.%${st.q.trim()}%`);
     const { data, error } = await withLoading(q);
     if (!list) return;
     if (error) { list.innerHTML = `<div class="card">خطأ: ${escapeHtml(error.message)}</div>`; return; }
@@ -1638,6 +1639,34 @@ const CacheRefresh = {
   },
 };
 
+/* ============================== التحقق من وجود تحديث جديد ============================== */
+const VersionCheck = {
+  _timer: null,
+  start() {
+    this.check();
+    this._timer = setInterval(() => this.check(), 5 * 60 * 1000); // كل 5 دقائق
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') this.check();
+    });
+  },
+  async check() {
+    try {
+      const res = await fetch(window.location.pathname + '?_v=' + Date.now(), { cache: 'no-store' });
+      if (!res.ok) return;
+      const text = await res.text();
+      const m = text.match(/window\.APP_VERSION\s*=\s*["']([^"']+)["']/);
+      if (m && m[1] && m[1] !== window.APP_VERSION) {
+        const banner = document.getElementById('update-banner');
+        if (banner) banner.classList.remove('hidden');
+      }
+    } catch (e) { /* تجاهل أخطاء الشبكة الصامتة */ }
+  },
+  forceRefresh() {
+    window.location.href = window.location.pathname + '?v=' + Date.now();
+  },
+};
+window.VersionCheck = VersionCheck;
+
 /* ============================== تشغيل التطبيق ============================== */
 window.Router = Router; window.Auth = Auth; window.App = App; window.EntryFlow = EntryFlow;
 window.StudentCard = StudentCard; window.Modal = Modal; window.FollowUp = FollowUp;
@@ -1646,10 +1675,9 @@ window.SettingsTypes = SettingsTypes;
 
 document.addEventListener('DOMContentLoaded', () => {
   Auth.init();
+  VersionCheck.start();
 });
 
 </script>
 
-
-</body>
-</html>
+</body></html>
