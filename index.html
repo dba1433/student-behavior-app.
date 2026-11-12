@@ -331,7 +331,7 @@ window.APP_CONFIG = {
   SUPABASE_ANON_KEY: "sb_publishable_7lnSNnVp_lc2RRYqZ9VgHA_EX6EeeJ1",
 };
 /* رقم نسخة الملف — يتغيّر مع كل تحديث لتفعيل تنبيه «يتوفر تحديث جديد» تلقائيًا */
-window.APP_VERSION = "2026-11-12.1";
+window.APP_VERSION = "2026-11-12.2";
 </script>
 <script>
 'use strict';
@@ -1090,9 +1090,27 @@ Views.studentCard = async (root, params) => {
             <span class="muted">${fmtDateTime(f.created_at)}</span></div>
           <div class="tl-meta">أنشأها: ${escapeHtml(f.profiles?.full_name || '—')}${f.closed_at ? ' · أُغلقت: ' + fmtDateTime(f.closed_at) : ''}</div>
           ${f.notes ? `<div class="tl-note">${escapeHtml(f.notes)}</div>` : ''}
+          ${isAutoFollowUp(f) && f.status !== 'مغلقة' && (warnings || []).length < WARNING_LIMIT ? `
+            <div class="err-box" style="margin-top:8px;background:#ffedd5;border-color:#fdba74;color:#9a3412">
+              ⚠️ فُتحت تلقائيًا عند بلوغ ${WARNING_LIMIT} إنذارات، والطالب الآن لديه ${(warnings || []).length} فقط. قد لا تكون مستحقة بعد حذف الإنذار.
+            </div>` : ''}
+          ${isAdminUser ? `<div style="margin-top:6px"><button class="btn ghost sm" style="color:var(--danger)" onclick="FollowUpAdmin.remove('${f.id}')">🗑️ حذف المتابعة</button></div>` : ''}
         </div>`).join('')}</div>` : '<div class="empty-state">لا توجد متابعات لهذا الطالب</div>'}
     </div>` : ''}
   `;
+};
+
+function isAutoFollowUp(f) { return typeof f.notes === 'string' && f.notes.startsWith('تم فتح الحالة تلقائيًا'); }
+
+const FollowUpAdmin = {
+  async remove(id) {
+    if (!profile || profile.role !== 'admin') return;
+    if (!confirm('تأكيد حذف هذه المتابعة نهائيًا؟ لا يمكن التراجع.')) return;
+    const { error } = await withLoading(sb.from('follow_ups').delete().eq('id', id));
+    if (error) { toast('تعذر الحذف: ' + error.message, 'error'); return; }
+    toast('تم حذف المتابعة', 'success');
+    Router.render();
+  },
 };
 
 /* ---------- تعديل/حذف إنذار أو إيجابي من السجل الزمني (للإدارة فقط) ---------- */
@@ -1135,6 +1153,21 @@ const TimelineAdmin = {
     const { error } = await withLoading(sb.from(r.table).delete().eq('id', r.id));
     if (error) { toast('تعذر الحذف: ' + error.message, 'error'); return; }
     toast('تم الحذف', 'success');
+    // بعد حذف إنذار: إن نزل العدد دون الحد وتوجد متابعة فتحها النظام تلقائيًا، اسأل عن حذفها
+    if (r.table === 'warnings') {
+      try {
+        const sid = window.__tlStudentId;
+        const left = await countWarnings(sid);
+        if (left < WARNING_LIMIT) {
+          const { data: fus } = await sb.from('follow_ups').select('id, notes, status, created_at').eq('student_id', sid).neq('status', 'مغلقة');
+          const autos = (fus || []).filter(isAutoFollowUp);
+          if (autos.length && confirm(`بعد الحذف أصبح لدى الطالب ${left} إنذار فقط (أقل من ${WARNING_LIMIT}).\nتوجد ${autos.length === 1 ? 'متابعة' : autos.length + ' متابعات'} فتحها النظام تلقائيًا عند بلوغ الحد.\n\nهل تريد حذفها أيضًا؟`)) {
+            const { error: dErr } = await withLoading(sb.from('follow_ups').delete().in('id', autos.map(a => a.id)));
+            if (dErr) toast('تعذر حذف المتابعة: ' + dErr.message, 'error'); else toast('تم حذف المتابعة التلقائية', 'success');
+          }
+        }
+      } catch (e) { /* لا نُفشل الحذف الأساسي */ }
+    }
     Router.render();
   },
 };
@@ -1858,7 +1891,7 @@ window.VersionCheck = VersionCheck;
 
 /* ============================== تشغيل التطبيق ============================== */
 window.Router = Router; window.Auth = Auth; window.App = App; window.EntryFlow = EntryFlow;
-window.StudentCard = StudentCard; window.TimelineAdmin = TimelineAdmin; window.Sanctions = Sanctions; window.Modal = Modal; window.FollowUp = FollowUp;
+window.StudentCard = StudentCard; window.TimelineAdmin = TimelineAdmin; window.FollowUpAdmin = FollowUpAdmin; window.Sanctions = Sanctions; window.Modal = Modal; window.FollowUp = FollowUp;
 window.Dashboard = Dashboard; window.StudentsMgr = StudentsMgr; window.StaffMgr = StaffMgr;
 window.SettingsTypes = SettingsTypes;
 
