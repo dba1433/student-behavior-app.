@@ -331,7 +331,7 @@ window.APP_CONFIG = {
   SUPABASE_ANON_KEY: "sb_publishable_7lnSNnVp_lc2RRYqZ9VgHA_EX6EeeJ1",
 };
 /* رقم نسخة الملف — يتغيّر مع كل تحديث لتفعيل تنبيه «يتوفر تحديث جديد» تلقائيًا */
-window.APP_VERSION = "2026-11-02.1";
+window.APP_VERSION = "2026-11-12.1";
 </script>
 <script>
 'use strict';
@@ -1031,10 +1031,12 @@ Views.studentCard = async (root, params) => {
   const status = studentStatus((warnings || []).length);
   const sctx = buildSanctionContext(sanctionRows || [], warnings || []);
   const timeline = [
-    ...(warnings || []).map(w => ({ type: 'warning', date: w.created_at, title: w.violation_types?.name || 'إنذار', by: w.profiles?.full_name, note: w.note })),
-    ...(positives || []).map(p => ({ type: 'positive', date: p.created_at, title: p.positive_types?.name || 'إيجابي', by: p.profiles?.full_name, note: p.note })),
-    ...(followUps || []).map(f => ({ type: 'followup', date: f.created_at, title: 'متابعة: ' + f.stage, by: f.profiles?.full_name, note: f.notes })),
+    ...(warnings || []).map(w => ({ type: 'warning', table: 'warnings', id: w.id, typeId: w.violation_type_id, date: w.created_at, title: w.violation_types?.name || 'إنذار', by: w.profiles?.full_name, note: w.note })),
+    ...(positives || []).map(p => ({ type: 'positive', table: 'positives', id: p.id, typeId: p.positive_type_id, date: p.created_at, title: p.positive_types?.name || 'إيجابي', by: p.profiles?.full_name, note: p.note })),
   ].sort((a, b) => new Date(b.date) - new Date(a.date));
+  window.__tlRows = timeline;
+  window.__tlStudentId = stu.id;
+  const isAdminUser = profile.role === 'admin';
 
   const canManage = profile.role === 'admin' || profile.role === 'supervisor';
   const canSeeFollowUps = profile.role === 'admin' || profile.role === 'lead';
@@ -1064,18 +1066,77 @@ Views.studentCard = async (root, params) => {
     ${Sanctions.cardHtml(stu.id, sctx)}
 
     <div class="card">
-      <h3>السجل الزمني الكامل</h3>
+      <h3>السجل الزمني الكامل <span class="muted" style="font-size:13px;font-weight:400">(إنذارات وإيجابيات)</span></h3>
       <div class="timeline">
-        ${timeline.length ? timeline.map(t => `
+        ${timeline.length ? timeline.map((t, i) => `
           <div class="tl-item ${t.type}">
             <div class="tl-top"><span>${t.type === 'warning' ? '🟠' : t.type === 'positive' ? '🟢' : '📋'} ${escapeHtml(t.title)}</span>
               <span class="muted">${fmtDateTime(t.date)}</span></div>
             <div class="tl-meta">سجّلها: ${escapeHtml(t.by || '—')}</div>
             ${t.note ? `<div class="tl-note">${escapeHtml(t.note)}</div>` : ''}
+            ${isAdminUser ? `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn ghost sm" onclick="TimelineAdmin.edit(${i})">✏️ تعديل</button>
+              <button class="btn ghost sm" style="color:var(--danger)" onclick="TimelineAdmin.remove(${i})">🗑️ حذف</button>
+            </div>` : ''}
           </div>`).join('') : '<div class="empty-state">لا يوجد سجل بعد</div>'}
       </div>
     </div>
+
+    ${canSeeFollowUps ? `<div class="card">
+      <h3>📋 المتابعات</h3>
+      ${(followUps || []).length ? `<div class="timeline">${followUps.map(f => `
+        <div class="tl-item followup">
+          <div class="tl-top"><span>📋 ${escapeHtml(f.stage)} <span class="pill ${f.status === 'مغلقة' ? 'ok' : 'warn'}">${escapeHtml(f.status)}</span></span>
+            <span class="muted">${fmtDateTime(f.created_at)}</span></div>
+          <div class="tl-meta">أنشأها: ${escapeHtml(f.profiles?.full_name || '—')}${f.closed_at ? ' · أُغلقت: ' + fmtDateTime(f.closed_at) : ''}</div>
+          ${f.notes ? `<div class="tl-note">${escapeHtml(f.notes)}</div>` : ''}
+        </div>`).join('')}</div>` : '<div class="empty-state">لا توجد متابعات لهذا الطالب</div>'}
+    </div>` : ''}
   `;
+};
+
+/* ---------- تعديل/حذف إنذار أو إيجابي من السجل الزمني (للإدارة فقط) ---------- */
+const TimelineAdmin = {
+  allowed() { return profile && profile.role === 'admin'; },
+  edit(i) {
+    if (!this.allowed()) return;
+    const r = window.__tlRows[i];
+    const types = r.table === 'warnings' ? CACHE.violationTypes : CACHE.positiveTypes;
+    const hasCurrent = types.some(t => t.id === r.typeId);
+    Modal.open(`
+      <h3>تعديل ${r.table === 'warnings' ? 'الإنذار' : 'الإيجابية'}</h3>
+      <label>${r.table === 'warnings' ? 'نوع المخالفة' : 'نوع الإيجابية'}</label>
+      <select id="tla-type">
+        ${hasCurrent ? '' : `<option value="${r.typeId || ''}" selected>${escapeHtml(r.title)} (غير مفعّل)</option>`}
+        ${types.map(t => `<option value="${t.id}" ${t.id === r.typeId ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('')}
+      </select>
+      <label>الملاحظة</label>
+      <textarea id="tla-note">${escapeHtml(r.note || '')}</textarea>
+      <div class="form-actions"><button class="btn block" onclick="TimelineAdmin.save(${i})">حفظ التعديل</button></div>
+    `);
+  },
+  async save(i) {
+    if (!this.allowed()) return;
+    const r = window.__tlRows[i];
+    const col = r.table === 'warnings' ? 'violation_type_id' : 'positive_type_id';
+    const typeId = document.getElementById('tla-type').value;
+    const note = document.getElementById('tla-note').value.trim();
+    const payload = { note: note || null };
+    if (typeId) payload[col] = typeId;
+    const { error } = await withLoading(sb.from(r.table).update(payload).eq('id', r.id));
+    if (error) { toast('تعذر الحفظ: ' + error.message, 'error'); return; }
+    toast('تم تعديل السجل', 'success');
+    Modal.close(); Router.render();
+  },
+  async remove(i) {
+    if (!this.allowed()) return;
+    const r = window.__tlRows[i];
+    if (!confirm(`تأكيد حذف هذا ${r.table === 'warnings' ? 'الإنذار' : 'السجل'} (${r.title})؟ لا يمكن التراجع.`)) return;
+    const { error } = await withLoading(sb.from(r.table).delete().eq('id', r.id));
+    if (error) { toast('تعذر الحذف: ' + error.message, 'error'); return; }
+    toast('تم الحذف', 'success');
+    Router.render();
+  },
 };
 
 const StudentCard = {
@@ -1684,6 +1745,7 @@ const StaffMgr = {
 
 /* ---------- إعدادات السلوك (admin) ---------- */
 Views.settingsTypes = async (root) => {
+  if (window.__setTab === 'log') window.__setTab = 'violation';
   const st = (window.__setTab = window.__setTab || 'violation');
   root.innerHTML = `
     <div class="card">
@@ -1691,9 +1753,9 @@ Views.settingsTypes = async (root) => {
       <div class="tabs">
         <button class="tab ${st === 'violation' ? 'active' : ''}" onclick="SettingsTypes.setTab('violation')">تسجيل إنذار</button>
         <button class="tab ${st === 'positive' ? 'active' : ''}" onclick="SettingsTypes.setTab('positive')">سلوك إيجابي</button>
-        <button class="tab ${st === 'log' ? 'active' : ''}" onclick="SettingsTypes.setTab('log')">السجل والتعديلات</button>
       </div>
-      ${st !== 'log' ? `<button class="btn sm" onclick="SettingsTypes.addNew()">➕ إضافة سلوك</button>` : `<p class="muted">تعديل أو حذف إنذار/إيجابي مُسجَّل بالخطأ (تراجع)</p>`}
+      <button class="btn sm" onclick="SettingsTypes.addNew()">➕ إضافة سلوك</button>
+      <p class="muted" style="margin-top:8px">لتعديل أو حذف إنذار/إيجابي مُسجَّل بالخطأ: افتح ملف الطالب ← «السجل الزمني الكامل».</p>
     </div>
     <div id="types-list"><div class="empty-state">جارٍ التحميل…</div></div>
   `;
@@ -1704,7 +1766,6 @@ const SettingsTypes = {
   table() { return window.__setTab === 'violation' ? 'violation_types' : 'positive_types'; },
   async setTab(tab) { window.__setTab = tab; await Router.render(); },
   async load() {
-    if (window.__setTab === 'log') { await SettingsTypes.loadLog(); return; }
     const { data, error } = await withLoading(sb.from(SettingsTypes.table()).select('*').order('sort_order'));
     const list = document.getElementById('types-list');
     if (!list) return;
@@ -1754,62 +1815,6 @@ const SettingsTypes = {
     await CacheRefresh.types();
     SettingsTypes.load();
   },
-  async loadLog() {
-    const list = document.getElementById('types-list');
-    if (!list) return;
-    list.innerHTML = '<div class="empty-state">جارٍ التحميل…</div>';
-    const [{ data: warnings }, { data: positives }] = await withLoading(Promise.all([
-      sb.from('warnings').select('id, note, created_at, violation_types(name), students(full_name, academic_number)').order('created_at', { ascending: false }).limit(100),
-      sb.from('positives').select('id, note, created_at, positive_types(name), students(full_name, academic_number)').order('created_at', { ascending: false }).limit(100),
-    ]));
-    if (!list) return;
-    const rows = [
-      ...(warnings || []).map(w => ({ id: w.id, table: 'warnings', kind: 'إنذار', typeName: w.violation_types?.name || '—', note: w.note, date: w.created_at, student: w.students?.full_name || '—' })),
-      ...(positives || []).map(p => ({ id: p.id, table: 'positives', kind: 'إيجابي', typeName: p.positive_types?.name || '—', note: p.note, date: p.created_at, student: p.students?.full_name || '—' })),
-    ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 150);
-    window.__logRows = rows;
-    list.innerHTML = rows.length ? `<div class="table-wrap"><table>
-      <thead><tr><th>النوع</th><th>الطالب</th><th>السبب</th><th>الملاحظة</th><th>التاريخ</th><th>إجراءات</th></tr></thead>
-      <tbody>${rows.map((r, i) => `<tr>
-        <td><span class="pill ${r.kind === 'إنذار' ? 'warn' : 'ok'}">${r.kind}</span></td>
-        <td>${escapeHtml(r.student)}</td>
-        <td>${escapeHtml(r.typeName)}</td>
-        <td>${escapeHtml(r.note || '—')}</td>
-        <td>${fmtDateTime(r.date)}</td>
-        <td style="display:flex;gap:6px;flex-wrap:wrap">
-          <button class="btn ghost sm" onclick="SettingsTypes.editLogNote(${i})">✏️ تعديل</button>
-          <button class="btn ghost sm" style="color:var(--danger)" onclick="SettingsTypes.deleteLogEntry(${i})">🗑️ حذف (تراجع)</button>
-        </td>
-      </tr>`).join('')}</tbody></table></div>
-      <p class="muted" style="margin-top:10px">آخر 150 سجل (إنذارات وإيجابيات). الحذف هنا يُستخدم للتراجع عن خطأ في التسجيل.</p>`
-      : '<div class="empty-state">لا توجد سجلات بعد</div>';
-  },
-  editLogNote(i) {
-    const r = window.__logRows[i];
-    Modal.open(`
-      <h3>تعديل ملاحظة السجل</h3>
-      <div class="muted">${escapeHtml(r.kind)} — ${escapeHtml(r.student)} — ${escapeHtml(r.typeName)}</div>
-      <label>الملاحظة</label><textarea id="log-note">${escapeHtml(r.note || '')}</textarea>
-      <div class="form-actions"><button class="btn block" onclick="SettingsTypes.saveLogNote(${i})">حفظ</button></div>
-    `);
-  },
-  async saveLogNote(i) {
-    const r = window.__logRows[i];
-    const note = document.getElementById('log-note').value.trim();
-    const { error } = await withLoading(sb.from(r.table).update({ note: note || null }).eq('id', r.id));
-    if (error) { toast('تعذر الحفظ: ' + error.message, 'error'); return; }
-    toast('تم تحديث الملاحظة', 'success');
-    Modal.close();
-    SettingsTypes.loadLog();
-  },
-  async deleteLogEntry(i) {
-    const r = window.__logRows[i];
-    if (!confirm(`تأكيد حذف هذا السجل (${r.kind} — ${r.student})؟ لا يمكن التراجع.`)) return;
-    const { error } = await withLoading(sb.from(r.table).delete().eq('id', r.id));
-    if (error) { toast('تعذر الحذف: ' + error.message, 'error'); return; }
-    toast('تم حذف السجل', 'success');
-    SettingsTypes.loadLog();
-  },
 };
 
 const CacheRefresh = {
@@ -1853,7 +1858,7 @@ window.VersionCheck = VersionCheck;
 
 /* ============================== تشغيل التطبيق ============================== */
 window.Router = Router; window.Auth = Auth; window.App = App; window.EntryFlow = EntryFlow;
-window.StudentCard = StudentCard; window.Sanctions = Sanctions; window.Modal = Modal; window.FollowUp = FollowUp;
+window.StudentCard = StudentCard; window.TimelineAdmin = TimelineAdmin; window.Sanctions = Sanctions; window.Modal = Modal; window.FollowUp = FollowUp;
 window.Dashboard = Dashboard; window.StudentsMgr = StudentsMgr; window.StaffMgr = StaffMgr;
 window.SettingsTypes = SettingsTypes;
 
