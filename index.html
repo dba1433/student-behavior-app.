@@ -142,6 +142,12 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--teal);outline-of
 .stat-box .num{font-size:20px;font-weight:900;font-family:'Amiri',serif}
 .stat-box .lbl{font-size:11px;color:var(--muted)}
 .timeline{margin-top:14px}
+.perm-switch{position:relative;display:inline-block;width:46px;height:26px}
+.perm-switch input{opacity:0;width:0;height:0}
+.perm-switch span{position:absolute;inset:0;background:#cbd5e1;border-radius:26px;cursor:pointer;transition:.2s}
+.perm-switch span:before{content:"";position:absolute;height:20px;width:20px;right:3px;top:3px;background:#fff;border-radius:50%;transition:.2s}
+.perm-switch input:checked+span{background:var(--ok)}
+.perm-switch input:checked+span:before{transform:translateX(-20px)}
 .tl-item{border-right:3px solid var(--line);padding:8px 14px;margin-bottom:6px;position:relative}
 .tl-item.warning{border-color:var(--warn)}
 .tl-item.positive{border-color:var(--ok)}
@@ -331,7 +337,7 @@ window.APP_CONFIG = {
   SUPABASE_ANON_KEY: "sb_publishable_7lnSNnVp_lc2RRYqZ9VgHA_EX6EeeJ1",
 };
 /* رقم نسخة الملف — يتغيّر مع كل تحديث لتفعيل تنبيه «يتوفر تحديث جديد» تلقائيًا */
-window.APP_VERSION = "2026-11-14.2";
+window.APP_VERSION = "2026-11-15.1";
 </script>
 <script>
 'use strict';
@@ -479,7 +485,7 @@ const Router = {
       home: 'الرئيسية', warningFlow: 'تسجيل إنذار', positiveFlow: 'تسجيل إيجابي',
       studentSearch: 'بحث عن طالب', studentCard: 'ملف الطالب', followUps: 'المتابعة',
       followUpCase: 'حالة متابعة', dashboard: 'لوحة الإدارة', studentsManage: 'إدارة الطلاب',
-      staffManage: 'المشرفون', settingsTypes: 'إعدادات السلوك', idealStudent: 'الطالب المثالي',
+      staffManage: 'المشرفون', settingsTypes: 'إعدادات السلوك', idealStudent: 'الطالب المثالي', permissions: 'الصلاحيات',
     };
     document.getElementById('topbar-title').textContent = titles[view] || 'منظومة السلوك الطلابي';
     try {
@@ -649,7 +655,15 @@ const Auth = {
   },
 };
 
+function can(p) { return !!profile && (profile.role === 'admin' || (CACHE.perms && CACHE.perms[p] === true)); }
+async function loadMyPermissions() {
+  if (!profile || profile.role === 'admin') { CACHE.perms = {}; return; }
+  const { data } = await sb.from('role_permissions').select('permission, allowed').eq('role', profile.role);
+  CACHE.perms = Object.fromEntries((data || []).map(r => [r.permission, r.allowed]));
+}
+
 async function bootstrapCaches() {
+  await loadMyPermissions();
   const [{ data: vt }, { data: pt }] = await Promise.all([
     sb.from('violation_types').select('id,name,level').eq('is_active', true).order('sort_order'),
     sb.from('positive_types').select('id,name,level').eq('is_active', true).order('sort_order'),
@@ -668,7 +682,9 @@ const Views = {};
 
 /* ---------- الرئيسية ---------- */
 Views.home = async (root) => {
-  const isLead = profile.role === 'lead' || profile.role === 'admin';
+  await loadMyPermissions();
+  const isLead = can('manage_followups');
+  const canDash = can('view_dashboard');
   const isAdmin = profile.role === 'admin';
   root.innerHTML = `
     <div class="big-grid">
@@ -681,12 +697,16 @@ Views.home = async (root) => {
       <button class="big-btn followup ${isLead ? '' : 'hidden'}" onclick="Router.go('followUps')">
         <span class="emoji">📋</span> المتابعة</button>
     </div>
-    ${(isLead || isAdmin) ? `
+    ${(canDash || isAdmin) ? `
     <div class="section-label">أدوات الإدارة</div>
     <div class="tool-grid">
-      ${isLead ? `<button class="tool-card" onclick="Router.go('dashboard')">
+      ${canDash ? `<button class="tool-card" onclick="Router.go('dashboard')">
         <span class="tool-icon">📊</span>
         <span class="tool-text"><span class="tool-title">لوحة الإدارة والتقارير</span><span class="tool-sub">إحصائيات، فلاتر، تصدير Excel</span></span>
+      </button>` : ''}
+      ${isAdmin ? `<button class="tool-card" onclick="Router.go('permissions')">
+        <span class="tool-icon">🔐</span>
+        <span class="tool-text"><span class="tool-title">الصلاحيات</span><span class="tool-sub">ضبط ما يستطيعه المشرف الأول والمشرف</span></span>
       </button>` : ''}
       ${isAdmin ? `<button class="tool-card" onclick="Router.go('idealStudent')">
         <span class="tool-icon">🏅</span>
@@ -815,7 +835,7 @@ function sanctionNoticeHtml(ctx) {
 }
 
 const Sanctions = {
-  canManage() { return profile.role === 'admin' || profile.role === 'lead'; },
+  canManage() { return can('record_sanction'); },
   cardHtml(studentId, ctx) {
     const rows = ctx.sanctions.map(x => {
       const ret = sanctionReturnDate(x);
@@ -1056,7 +1076,7 @@ Views.studentCard = async (root, params) => {
     sb.from('students').select('*').eq('id', id).single(),
     sb.from('warnings').select('*, violation_types(name, level), profiles(full_name)').eq('student_id', id).order('created_at', { ascending: false }),
     sb.from('positives').select('*, positive_types(name, level), profiles(full_name)').eq('student_id', id).order('created_at', { ascending: false }),
-    (profile.role === 'admin' || profile.role === 'lead')
+    can('manage_followups')
       ? sb.from('follow_ups').select('*, profiles(full_name)').eq('student_id', id).order('created_at', { ascending: false })
       : Promise.resolve({ data: [] }),
     sb.from('student_sanctions').select('*').eq('student_id', id).order('start_date', { ascending: false }),
@@ -1072,10 +1092,10 @@ Views.studentCard = async (root, params) => {
   ].sort((a, b) => new Date(b.date) - new Date(a.date));
   window.__tlRows = timeline;
   window.__tlStudentId = stu.id;
-  const isAdminUser = profile.role === 'admin' || profile.role === 'lead';
+  const canEditLog = can('edit_log'), canDeleteLog = can('delete_log'), canDeleteFu = can('delete_followup');
 
-  const canManage = ['admin', 'lead', 'supervisor'].includes(profile.role);
-  const canSeeFollowUps = profile.role === 'admin' || profile.role === 'lead';
+  const canManage = can('edit_student');
+  const canSeeFollowUps = can('manage_followups');
 
   root.innerHTML = `
     <div class="card">
@@ -1111,9 +1131,9 @@ Views.studentCard = async (root, params) => {
               <span class="muted">${fmtDateTime(t.date)}</span></div>
             <div class="tl-meta">سجّلها: ${escapeHtml(t.by || '—')}</div>
             ${t.note ? `<div class="tl-note">${escapeHtml(t.note)}</div>` : ''}
-            ${isAdminUser ? `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
-              <button class="btn ghost sm" onclick="TimelineAdmin.edit(${i})">✏️ تعديل</button>
-              <button class="btn ghost sm" style="color:var(--danger)" onclick="TimelineAdmin.remove(${i})">🗑️ حذف</button>
+            ${(canEditLog || canDeleteLog) ? `<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+              ${canEditLog ? `<button class="btn ghost sm" onclick="TimelineAdmin.edit(${i})">✏️ تعديل</button>` : ''}
+              ${canDeleteLog ? `<button class="btn ghost sm" style="color:var(--danger)" onclick="TimelineAdmin.remove(${i})">🗑️ حذف</button>` : ''}
             </div>` : ''}
           </div>`).join('') : '<div class="empty-state">لا يوجد سجل بعد</div>'}
       </div>
@@ -1131,7 +1151,7 @@ Views.studentCard = async (root, params) => {
             <div class="err-box" style="margin-top:8px;background:#ffedd5;border-color:#fdba74;color:#9a3412">
               ⚠️ فُتحت تلقائيًا عند بلوغ ${WARNING_LIMIT} إنذارات، والطالب الآن لديه ${(warnings || []).length} فقط. قد لا تكون مستحقة بعد حذف الإنذار.
             </div>` : ''}
-          ${isAdminUser ? `<div style="margin-top:6px"><button class="btn ghost sm" style="color:var(--danger)" onclick="FollowUpAdmin.remove('${f.id}')">🗑️ حذف المتابعة</button></div>` : ''}
+          ${canDeleteFu ? `<div style="margin-top:6px"><button class="btn ghost sm" style="color:var(--danger)" onclick="FollowUpAdmin.remove('${f.id}')">🗑️ حذف المتابعة</button></div>` : ''}
         </div>`).join('')}</div>` : '<div class="empty-state">لا توجد متابعات لهذا الطالب</div>'}
     </div>` : ''}
   `;
@@ -1141,7 +1161,7 @@ function isAutoFollowUp(f) { return typeof f.notes === 'string' && f.notes.start
 
 const FollowUpAdmin = {
   async remove(id) {
-    if (!profile || !['admin', 'lead'].includes(profile.role)) return;
+    if (!can('delete_followup')) return;
     if (!confirm('تأكيد حذف هذه المتابعة نهائيًا؟ لا يمكن التراجع.')) return;
     const { error } = await withLoading(sb.from('follow_ups').delete().eq('id', id));
     if (error) { toast('تعذر الحذف: ' + error.message, 'error'); return; }
@@ -1152,9 +1172,10 @@ const FollowUpAdmin = {
 
 /* ---------- تعديل/حذف إنذار أو إيجابي من السجل الزمني (للإدارة فقط) ---------- */
 const TimelineAdmin = {
-  allowed() { return !!profile && ['admin', 'lead'].includes(profile.role); },
+  canEdit() { return can('edit_log'); },
+  canDelete() { return can('delete_log'); },
   edit(i) {
-    if (!this.allowed()) return;
+    if (!this.canEdit()) return;
     const r = window.__tlRows[i];
     const types = r.table === 'warnings' ? CACHE.violationTypes : CACHE.positiveTypes;
     const hasCurrent = types.some(t => t.id === r.typeId);
@@ -1171,7 +1192,7 @@ const TimelineAdmin = {
     `);
   },
   async save(i) {
-    if (!this.allowed()) return;
+    if (!this.canEdit()) return;
     const r = window.__tlRows[i];
     const col = r.table === 'warnings' ? 'violation_type_id' : 'positive_type_id';
     const typeId = document.getElementById('tla-type').value;
@@ -1184,7 +1205,7 @@ const TimelineAdmin = {
     Modal.close(); Router.render();
   },
   async remove(i) {
-    if (!this.allowed()) return;
+    if (!this.canDelete()) return;
     const r = window.__tlRows[i];
     if (!confirm(`تأكيد حذف هذا ${r.table === 'warnings' ? 'الإنذار' : 'السجل'} (${r.title})؟ لا يمكن التراجع.`)) return;
     const { error } = await withLoading(sb.from(r.table).delete().eq('id', r.id));
@@ -1269,6 +1290,7 @@ const Modal = {
 
 /* ---------- المتابعة (follow-ups) ---------- */
 Views.followUps = async (root) => {
+  if (!can('manage_followups')) { root.innerHTML = '<div class="empty-state">ليست لديك صلاحية لهذه الشاشة</div>'; return; }
   const { data, error } = await withLoading(
     sb.from('follow_ups').select('*, students(full_name, academic_number, level, room)').neq('status', 'مغلقة').order('created_at', { ascending: false })
   );
@@ -1293,6 +1315,7 @@ Views.followUps = async (root) => {
 const STAGES = ['متابعة', 'جلسة توجيه', 'خطة تحسين', 'تقييم التحسن', 'مغلقة'];
 
 Views.followUpCase = async (root, params) => {
+  if (!can('manage_followups')) { root.innerHTML = '<div class="empty-state">ليست لديك صلاحية لهذه الشاشة</div>'; return; }
   const { data: f, error } = await withLoading(
     sb.from('follow_ups').select('*, students(full_name, academic_number, level, room), profiles(full_name)').eq('id', params.id).single()
   );
@@ -1350,6 +1373,7 @@ const FollowUp = {
 
 /* ---------- لوحة الإدارة والتقارير ---------- */
 Views.dashboard = async (root) => {
+  if (!can('view_dashboard')) { root.innerHTML = '<div class="empty-state">ليست لديك صلاحية لهذه الشاشة</div>'; return; }
   const st = (window.__dash = window.__dash || { tab: 'overview', filters: {} });
   const { data: stats } = await withLoading(sb.rpc('dashboard_stats'));
   const s = (stats && stats[0]) || {};
@@ -1813,6 +1837,67 @@ const StaffMgr = {
   },
 };
 
+/* ---------- ضبط الصلاحيات (للإدارة فقط) ---------- */
+const PERMISSIONS = [
+  { key: 'edit_student', label: 'تعديل بيانات الطالب', hint: 'الاسم والغرفة والمستوى، وإلغاء تفعيل الطالب' },
+  { key: 'edit_log', label: 'تعديل الإنذار والإيجابية', hint: 'تعديل نوع المخالفة والملاحظة من السجل الزمني' },
+  { key: 'delete_log', label: 'حذف الإنذار والإيجابية', hint: 'من السجل الزمني في ملف الطالب' },
+  { key: 'manage_followups', label: 'المتابعات', hint: 'عرضها وإنشاؤها وتحديثها' },
+  { key: 'delete_followup', label: 'حذف المتابعة', hint: 'تعمل مع صلاحية «المتابعات»' },
+  { key: 'record_sanction', label: 'الإجراءات الإدارية', hint: 'تسجيل سحب الغرفة وتعديل تاريخ العودة' },
+  { key: 'view_dashboard', label: 'لوحة التقارير', hint: 'إظهار الشاشة وتصدير Excel (بيانات الطلاب يقرؤها كل المشرفين أصلًا)' },
+];
+const PERM_DEFAULTS = {
+  lead: { view_dashboard: true, manage_followups: true, delete_followup: true, record_sanction: true, edit_student: true, edit_log: true, delete_log: true },
+  supervisor: { view_dashboard: false, manage_followups: false, delete_followup: false, record_sanction: false, edit_student: true, edit_log: false, delete_log: false },
+};
+
+Views.permissions = async (root) => {
+  if (!profile || profile.role !== 'admin') { root.innerHTML = '<div class="empty-state">هذه الشاشة للإدارة فقط</div>'; return; }
+  const { data, error } = await withLoading(sb.from('role_permissions').select('role, permission, allowed'));
+  if (error) { root.innerHTML = `<div class="card">تعذر تحميل الصلاحيات: ${escapeHtml(error.message)}</div>`; return; }
+  const m = {};
+  (data || []).forEach(r => { (m[r.role] = m[r.role] || {})[r.permission] = r.allowed; });
+  const cell = (role, key) => `<td style="text-align:center"><label class="perm-switch"><input type="checkbox" ${m[role]?.[key] ? 'checked' : ''} onchange="Perms.set('${role}','${key}',this)"><span></span></label></td>`;
+  root.innerHTML = `
+    <div class="card">
+      <h2>🔐 ضبط الصلاحيات</h2>
+      <p class="muted">فعّل أو عطّل ما يستطيعه كل دور. يُحفظ التغيير فورًا، ويسري على المشرفين عند عودتهم للشاشة الرئيسية.</p>
+      <p class="muted">الإدارة تملك كل الصلاحيات دائمًا، وتنفرد بإدارة الطلاب والمشرفين وإعدادات السلوك والطالب المثالي وهذه الشاشة.</p>
+    </div>
+    <div class="card">
+      <div class="table-wrap"><table>
+        <thead><tr><th>الصلاحية</th><th>الإدارة</th><th>المشرف الأول</th><th>مشرف</th></tr></thead>
+        <tbody>${PERMISSIONS.map(p => `<tr>
+          <td><b>${p.label}</b><div class="muted" style="font-size:12px">${p.hint}</div></td>
+          <td style="text-align:center">✅</td>${cell('lead', p.key)}${cell('supervisor', p.key)}
+        </tr>`).join('')}</tbody>
+      </table></div>
+      <div class="form-actions"><button class="btn secondary block" onclick="Perms.reset()">↩️ استعادة الإعدادات الافتراضية</button></div>
+    </div>`;
+};
+
+const Perms = {
+  async set(role, key, el) {
+    const allowed = el.checked;
+    const { error } = await sb.from('role_permissions').upsert(
+      { role, permission: key, allowed, updated_by: profile.id, updated_at: new Date().toISOString() },
+      { onConflict: 'role,permission' });
+    if (error) { el.checked = !allowed; toast('تعذر الحفظ: ' + error.message, 'error'); return; }
+    toast('تم حفظ الصلاحية', 'success');
+  },
+  async reset() {
+    if (!confirm('استعادة الصلاحيات الافتراضية للمشرف الأول والمشرف؟')) return;
+    const rows = [];
+    Object.entries(PERM_DEFAULTS).forEach(([role, perms]) => Object.entries(perms).forEach(([permission, allowed]) =>
+      rows.push({ role, permission, allowed, updated_by: profile.id, updated_at: new Date().toISOString() })));
+    const { error } = await withLoading(sb.from('role_permissions').upsert(rows, { onConflict: 'role,permission' }));
+    if (error) { toast('تعذر الاستعادة: ' + error.message, 'error'); return; }
+    toast('تمت استعادة الإعدادات الافتراضية', 'success');
+    Router.render();
+  },
+};
+
 /* ---------- الطالب المثالي (للإدارة فقط) ---------- */
 async function fetchAllRows(build) {
   const out = []; const size = 1000;
@@ -2084,7 +2169,7 @@ window.VersionCheck = VersionCheck;
 window.Router = Router; window.Auth = Auth; window.App = App; window.EntryFlow = EntryFlow;
 window.StudentCard = StudentCard; window.TimelineAdmin = TimelineAdmin; window.FollowUpAdmin = FollowUpAdmin; window.Sanctions = Sanctions; window.Modal = Modal; window.FollowUp = FollowUp;
 window.Dashboard = Dashboard; window.StudentsMgr = StudentsMgr; window.StaffMgr = StaffMgr;
-window.SettingsTypes = SettingsTypes; window.Ideal = Ideal;
+window.SettingsTypes = SettingsTypes; window.Ideal = Ideal; window.Perms = Perms;
 
 document.addEventListener('DOMContentLoaded', () => {
   Auth.init();
